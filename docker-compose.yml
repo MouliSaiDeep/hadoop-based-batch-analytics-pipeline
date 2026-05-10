@@ -1,0 +1,95 @@
+version: '3.8'
+
+services:
+  namenode:
+    image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
+    container_name: namenode
+    environment:
+      - CLUSTER_NAME=test
+    ports:
+      - "9870:9870"
+      - "9000:9000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9870"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  spark-master:
+    image: bitnamilegacy/spark:3.5.0
+    container_name: spark-master
+    environment:
+      - SPARK_MODE=master
+    ports:
+      - "8081:8080" # Map to 8081 on host to avoid conflict with Airflow
+      - "7077:7077"
+    volumes:
+      - ./data:/data
+      - ./jobs:/jobs
+      - ./output:/output
+    depends_on:
+      namenode:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  spark-worker:
+    image: bitnamilegacy/spark:3.5.0
+    container_name: spark-worker
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_MEMORY=2G
+      - SPARK_WORKER_CORES=2
+    volumes:
+      - ./data:/data
+      - ./jobs:/jobs
+      - ./output:/output
+    depends_on:
+      spark-master:
+        condition: service_healthy
+
+  data-generator:
+    image: python:3.9-slim
+    container_name: data-generator
+    volumes:
+      - ./data:/data
+    command: >
+      bash -c "chmod +x /data/generate_records.sh && /data/generate_records.sh && tail -f /dev/null"
+    healthcheck:
+      test: ["CMD", "test", "-f", "/data/cdr_data.csv"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  airflow:
+    image: apache/airflow:2.8.0
+    container_name: airflow
+    user: root
+    environment:
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - _AIRFLOW_DB_UPGRADE=True
+      - _AIRFLOW_WWW_USER_CREATE=True
+      - _AIRFLOW_WWW_USER_USERNAME=admin
+      - _AIRFLOW_WWW_USER_PASSWORD=admin
+      - JAVA_HOME=/usr/lib/jvm/default-java
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./data:/data
+      - ./jobs:/jobs
+      - ./output:/output
+    ports:
+      - "8080:8080"
+    command: >
+      bash -c "apt-get update && apt-get install -y default-jre-headless procps && su - airflow -c 'pip install apache-airflow-providers-apache-spark pyspark==3.5.0 && airflow standalone'"
+    depends_on:
+      data-generator:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
