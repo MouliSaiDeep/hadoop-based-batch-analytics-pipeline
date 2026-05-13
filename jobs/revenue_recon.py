@@ -25,7 +25,7 @@ def main():
     # Calculate total revenue
     result_df = df.agg(_sum("charge_amount").alias("total_revenue"))
 
-    result_df.write.mode("overwrite").csv(output_path, header=False)
+    result_df.coalesce(1).write.mode("overwrite").csv(output_path, header=False)
     
     output_count = result_df.count()
 
@@ -42,8 +42,16 @@ def main():
     }
 
     manifest_path = os.path.join(output_path, "_MANIFEST.json")
-    with open(manifest_path, "w") as f:
-        json.dump(manifest, f, indent=2)
+    
+    # Use Hadoop FileSystem API to ensure HDFS compatibility
+    manifest_str = json.dumps(manifest, indent=2)
+    URI = spark._jvm.java.net.URI
+    Path = spark._jvm.org.apache.hadoop.fs.Path
+    FileSystem = spark._jvm.org.apache.hadoop.fs.FileSystem
+    fs = FileSystem.get(URI(output_path), spark._jsc.hadoopConfiguration())
+    out = fs.create(Path(manifest_path))
+    out.write(bytearray(manifest_str, 'utf-8'))
+    out.close()
 
     spark.stop()
 

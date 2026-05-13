@@ -6,9 +6,12 @@ from datetime import datetime, timezone
 from pyspark.sql import SparkSession
 from pyspark.sql.types import StructType, StructField, StringType, IntegerType, FloatType
 
+import zlib
+
 # Custom partitioner function
 def custom_partitioner(key):
-    return hash(key)
+    # Deterministic hash instead of Python's randomized built-in hash()
+    return zlib.crc32(key.encode('utf-8')) % 20
 
 def process_partition(iterator):
     # Group all records by caller_id within this partition
@@ -23,12 +26,13 @@ def process_partition(iterator):
     results = []
     for caller_id, records in user_data.items():
         if len(records) < 2:
-            continue # Standard deviation requires at least 2 data points
-        
-        durations = [r['duration_sec'] for r in records]
-        mean = sum(durations) / len(durations)
-        variance = sum((x - mean) ** 2 for x in durations) / (len(durations) - 1)
-        stddev = math.sqrt(variance)
+            mean = records[0]['duration_sec'] if records else 0
+            stddev = 0.0
+        else:
+            durations = [r['duration_sec'] for r in records]
+            mean = sum(durations) / len(durations)
+            variance = sum((x - mean) ** 2 for x in durations) / (len(durations) - 1)
+            stddev = math.sqrt(variance)
         
         # Avoid division by zero issues or 0 stddev
         if stddev == 0:
@@ -101,8 +105,16 @@ def main():
     }
 
     manifest_path = os.path.join(output_path, "_MANIFEST.json")
-    with open(manifest_path, "w") as f:
-        json.dump(manifest, f, indent=2)
+    
+    # Use Hadoop FileSystem API to ensure HDFS compatibility
+    manifest_str = json.dumps(manifest, indent=2)
+    URI = spark._jvm.java.net.URI
+    Path = spark._jvm.org.apache.hadoop.fs.Path
+    FileSystem = spark._jvm.org.apache.hadoop.fs.FileSystem
+    fs = FileSystem.get(URI(output_path), spark._jsc.hadoopConfiguration())
+    out = fs.create(Path(manifest_path))
+    out.write(bytearray(manifest_str, 'utf-8'))
+    out.close()
 
     spark.stop()
 
