@@ -1,9 +1,15 @@
 version: '3.8'
 
+networks:
+  pipeline-net:
+    driver: bridge
+
 services:
   namenode:
     image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
     container_name: namenode
+    networks:
+      - pipeline-net
     environment:
       - CLUSTER_NAME=test
     ports:
@@ -15,13 +21,35 @@ services:
       timeout: 10s
       retries: 5
 
+  datanode:
+    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    container_name: datanode
+    networks:
+      - pipeline-net
+    environment:
+      - CLUSTER_NAME=test
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:8020
+      - CORE_CONF_hadoop_http_staticuser_user=root
+      - HDFS_CONF_dfs_namenode_datanode_registration_ip___hostname___check=false
+    depends_on:
+      namenode:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9864"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
   spark-master:
-    image: bitnamilegacy/spark:3.5.0
+    image: bitnami/spark:3.5
     container_name: spark-master
+    networks:
+      - pipeline-net
     environment:
       - SPARK_MODE=master
+      - SPARK_MASTER_WEBUI_PORT=8081
     ports:
-      - "8081:8080" # Map to 8081 on host to avoid conflict with Airflow
+      - "8081:8081"
       - "7077:7077"
     volumes:
       - ./data:/data
@@ -31,14 +59,16 @@ services:
       namenode:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      test: ["CMD", "curl", "-f", "http://localhost:8081"]
       interval: 30s
       timeout: 10s
       retries: 5
 
   spark-worker:
-    image: bitnamilegacy/spark:3.5.0
+    image: bitnami/spark:3.5
     container_name: spark-worker
+    networks:
+      - pipeline-net
     environment:
       - SPARK_MODE=worker
       - SPARK_MASTER_URL=spark://spark-master:7077
@@ -55,6 +85,8 @@ services:
   data-generator:
     image: python:3.9-slim
     container_name: data-generator
+    networks:
+      - pipeline-net
     volumes:
       - ./data:/data
     command: >
@@ -69,6 +101,8 @@ services:
     image: apache/airflow:2.8.0
     container_name: airflow
     user: root
+    networks:
+      - pipeline-net
     environment:
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
       - _AIRFLOW_DB_UPGRADE=True
@@ -84,7 +118,7 @@ services:
     ports:
       - "8080:8080"
     command: >
-      bash -c "apt-get update && apt-get install -y default-jre-headless procps && su - airflow -c 'pip install apache-airflow-providers-apache-spark pyspark==3.5.0 && airflow standalone'"
+      bash -c "apt-get update && apt-get install -y default-jre-headless procps && pip install apache-airflow-providers-apache-spark pyspark==3.5.0 && su - airflow -c 'airflow standalone'"
     depends_on:
       data-generator:
         condition: service_healthy

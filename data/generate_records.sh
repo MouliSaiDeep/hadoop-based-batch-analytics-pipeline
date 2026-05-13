@@ -27,29 +27,31 @@ with open(output_file, mode='w', newline='') as f:
     # Write header
     writer.writerow(["caller_id", "receiver_id", "duration_sec", "tower_id", "timestamp", "call_type", "charge_amount"])
     
-    # Generate whale records
-    for _ in range(whale_records):
-        writer.writerow([
-            whale_caller,
-            f"USER_{random.randint(1, 10000)}",
-            random.randint(10, 3600),
-            random.choice(tower_ids),
-            random_date().isoformat(),
-            random.choice(call_types),
-            round(random.uniform(0.1, 5.0), 2)
-        ])
+    # Pre-calculate record order to shuffle them
+    record_types = ['whale'] * whale_records + ['normal'] * normal_records
+    random.shuffle(record_types)
     
-    # Generate normal records
-    for _ in range(normal_records):
-        writer.writerow([
-            f"USER_{random.randint(1, 50000)}",
-            f"USER_{random.randint(1, 50000)}",
-            random.randint(10, 3600),
-            random.choice(tower_ids),
-            random_date().isoformat(),
-            random.choice(call_types),
-            round(random.uniform(0.1, 5.0), 2)
-        ])
+    for r_type in record_types:
+        if r_type == 'whale':
+            writer.writerow([
+                whale_caller,
+                f"USER_{random.randint(1, 10000)}",
+                random.randint(10, 3600),
+                random.choice(tower_ids),
+                random_date().isoformat(),
+                random.choice(call_types),
+                round(random.uniform(0.1, 5.0), 2)
+            ])
+        else:
+            writer.writerow([
+                f"USER_{random.randint(1, 50000)}",
+                f"USER_{random.randint(1, 50000)}",
+                random.randint(10, 3600),
+                random.choice(tower_ids),
+                random_date().isoformat(),
+                random.choice(call_types),
+                round(random.uniform(0.1, 5.0), 2)
+            ])
 
 print(f"Successfully generated records.")
 EOF

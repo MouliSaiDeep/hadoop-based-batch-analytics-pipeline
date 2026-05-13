@@ -36,4 +36,15 @@ echo "Triggering Airflow DAG: $DAG_ID with run_id: $RUN_ID"
 
 docker compose exec -T airflow airflow dags trigger -r "$RUN_ID" --conf "{\"run_id\":\"$RUN_ID\"}" "$DAG_ID"
 
-echo "DAG triggered successfully."
+echo "Waiting for DAG $DAG_ID to complete..."
+while true; do
+    STATE=$(docker compose exec -T airflow airflow dags state "$DAG_ID" "$RUN_ID")
+    if [ "$STATE" == "success" ]; then
+        echo "DAG completed successfully."
+        break
+    elif [ "$STATE" == "failed" ]; then
+        echo "DAG failed."
+        exit 1
+    fi
+    sleep 5
+done

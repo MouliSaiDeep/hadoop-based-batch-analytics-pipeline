@@ -1,0 +1,7 @@
+data/cdr_data.csv
+data/generate.py
+output/
+.idea/
+.vscode/
+__pycache__/
+*.pyc
