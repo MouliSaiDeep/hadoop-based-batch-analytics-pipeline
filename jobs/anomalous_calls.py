@@ -4,9 +4,48 @@ import json
 import math
 from datetime import datetime, timezone
 from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, lit, mean as _mean, stddev as _stddev, abs as _abs
 from pyspark.sql.types import StructType, StructField, StringType, IntegerType, FloatType
 
 import zlib
+
+def copy_directory_from_hdfs_to_local(spark, hdfs_dir, output_dir):
+    URI = spark._jvm.java.net.URI
+    Path = spark._jvm.org.apache.hadoop.fs.Path
+    FileSystem = spark._jvm.org.apache.hadoop.fs.FileSystem
+    IOUtils = spark._jvm.org.apache.hadoop.io.IOUtils
+    
+    conf = spark._jsc.hadoopConfiguration()
+    
+    target_full_path = "file://" + os.path.abspath(output_dir)
+    target_fs = FileSystem.get(URI(target_full_path), conf)
+    
+    src_full_path = hdfs_dir
+    src_fs = FileSystem.get(URI(src_full_path), conf)
+    
+    target_path_obj = Path(target_full_path)
+    if not target_fs.exists(target_path_obj):
+        target_fs.mkdirs(target_path_obj)
+        
+    src_dir_path = Path(src_full_path)
+    if src_fs.exists(src_dir_path):
+        file_statuses = src_fs.listStatus(src_dir_path)
+        for status in file_statuses:
+            file_path = status.getPath()
+            file_name = file_path.getName()
+            if file_name.startswith(".") or file_name.startswith("_SUCCESS"):
+                continue
+                
+            src_file_path = file_path
+            dest_file_path = Path(target_path_obj, file_name)
+            
+            in_stream = src_fs.open(src_file_path)
+            out_stream = target_fs.create(dest_file_path, True)
+            
+            IOUtils.copyBytes(in_stream, out_stream, conf)
+            
+            in_stream.close()
+            out_stream.close()
 
 # Custom partitioner function
 def custom_partitioner(key):
@@ -15,8 +54,6 @@ def custom_partitioner(key):
 
 def process_partition(iterator):
     # Group all records by caller_id within this partition
-    # Since we used partitionBy(..., custom_partitioner) on caller_id, 
-    # we are guaranteed that all records for a given caller_id are in the same partition.
     user_data = {}
     for caller_id, record in iterator:
         if caller_id not in user_data:
@@ -34,7 +71,7 @@ def process_partition(iterator):
             variance = sum((x - mean) ** 2 for x in durations) / (len(durations) - 1)
             stddev = math.sqrt(variance)
         
-        # Avoid division by zero issues or 0 stddev
+        # Avoid division by zero or 0 stddev
         if stddev == 0:
             continue
             
@@ -51,31 +88,62 @@ def process_partition(iterator):
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: anomalous_calls.py <run_id>")
+        print("Usage: anomalous_calls.py <run_id> [<input_path>]")
         sys.exit(1)
     
     run_id = sys.argv[1]
+    input_path = sys.argv[2] if len(sys.argv) > 2 else "/data/cdr_data.csv"
+    
     job_name = "anomalous_call_detection"
-    input_path = "/data/cdr_data.csv"
     output_path = f"/output/{job_name}/{run_id}/"
+    hdfs_tmp_path = f"hdfs://namenode:8020/tmp/output/{job_name}/{run_id}/"
 
     spark = SparkSession.builder \
         .appName(job_name) \
+        .config("spark.sql.session.timeZone", "UTC") \
         .getOrCreate()
 
     df = spark.read.csv(input_path, header=True, inferSchema=True)
     input_count = df.count()
 
-    # Create Key-Value RDD and apply Custom Partitioner
-    kv_rdd = df.rdd.map(lambda row: (row['caller_id'], row.asDict()))
-    
-    # 20 partitions should be sufficient for our 2M records
+    # TWO-PASS SKEW MITIGATION STRATEGY:
+    # 1. Isolate the whale caller "WHALE_CALLER_999" (10% of total data = 200k records)
+    whale_df = df.filter(col("caller_id") == "WHALE_CALLER_999")
+    normal_df = df.filter(col("caller_id") != "WHALE_CALLER_999")
+
+    # 2. Compute stats for the whale caller using highly-scalable Spark SQL
+    whale_stats = whale_df.agg(_mean("duration_sec").alias("mean"), _stddev("duration_sec").alias("stddev")).collect()[0]
+    w_mean = whale_stats["mean"] if whale_stats["mean"] is not None else 0.0
+    w_stddev = whale_stats["stddev"] if whale_stats["stddev"] is not None else 0.0
+
+    if w_stddev > 0:
+        whale_anomalies_df = whale_df.filter(_abs(col("duration_sec") - w_mean) > 3 * w_stddev) \
+            .select(
+                col("caller_id"),
+                col("timestamp").alias("call_timestamp"),
+                col("duration_sec"),
+                lit(float(round(w_mean, 2))).alias("user_mean_duration"),
+                lit(float(round(w_stddev, 2))).alias("user_stddev")
+            )
+    else:
+        # Create empty DataFrame with same schema if stddev is 0
+        whale_anomalies_schema = StructType([
+            StructField("caller_id", StringType(), True),
+            StructField("call_timestamp", StringType(), True),
+            StructField("duration_sec", IntegerType(), True),
+            StructField("user_mean_duration", FloatType(), True),
+            StructField("user_stddev", FloatType(), True)
+        ])
+        whale_anomalies_df = spark.createDataFrame([], whale_anomalies_schema)
+
+    # 3. For normal callers, apply Custom Partitioner on Key-Value RDD to route to reducers safely
+    kv_rdd = normal_df.rdd.map(lambda row: (row['caller_id'], row.asDict()))
     partitioned_rdd = kv_rdd.partitionBy(20, custom_partitioner)
     
-    # Process partitions to find anomalies
-    anomalous_rdd = partitioned_rdd.mapPartitions(process_partition)
+    # Process partitions to find normal caller anomalies
+    normal_anomalies_rdd = partitioned_rdd.mapPartitions(process_partition)
 
-    schema = StructType([
+    normal_anomalies_schema = StructType([
         StructField("caller_id", StringType(), True),
         StructField("call_timestamp", StringType(), True),
         StructField("duration_sec", IntegerType(), True),
@@ -83,14 +151,22 @@ def main():
         StructField("user_stddev", FloatType(), True)
     ])
     
-    result_df = spark.createDataFrame(anomalous_rdd, schema)
+    normal_anomalies_df = spark.createDataFrame(normal_anomalies_rdd, normal_anomalies_schema)
     
-    # Select in correct order just in case
+    # 4. Union the two DataFrames to construct the final results
+    result_df = whale_anomalies_df.union(normal_anomalies_df)
     result_df = result_df.select("caller_id", "call_timestamp", "duration_sec", "user_mean_duration", "user_stddev")
-    
-    result_df.write.mode("overwrite").csv(output_path, header=False)
+
+    # Cache result to prevent re-computation during count & write
+    result_df.cache()
+
+    # Coalesce to 1 to produce single CSV part file in HDFS
+    result_df.coalesce(1).write.mode("overwrite").csv(hdfs_tmp_path, header=False)
     
     output_count = result_df.count()
+
+    # Copy files to final target output destination (host-mount)
+    copy_directory_from_hdfs_to_local(spark, hdfs_tmp_path, output_path)
 
     # Generate Manifest
     manifest = {
@@ -106,15 +182,35 @@ def main():
 
     manifest_path = os.path.join(output_path, "_MANIFEST.json")
     
-    # Use Hadoop FileSystem API to ensure HDFS compatibility
+    # Robustly use Hadoop FileSystem API supporting both HDFS and Local schemes
     manifest_str = json.dumps(manifest, indent=2)
     URI = spark._jvm.java.net.URI
     Path = spark._jvm.org.apache.hadoop.fs.Path
     FileSystem = spark._jvm.org.apache.hadoop.fs.FileSystem
-    fs = FileSystem.get(URI(output_path), spark._jsc.hadoopConfiguration())
-    out = fs.create(Path(manifest_path))
+    
+    conf = spark._jsc.hadoopConfiguration()
+    if not output_path.startswith("hdfs://") and not output_path.startswith("file://"):
+        default_fs = conf.get("fs.defaultFS")
+        if default_fs and default_fs.startswith("hdfs://"):
+            full_path = default_fs + output_path
+        else:
+            full_path = "file://" + os.path.abspath(output_path)
+    else:
+        full_path = output_path
+        
+    fs = FileSystem.get(URI(full_path), conf)
+    out = fs.create(Path(manifest_path), True)
     out.write(bytearray(manifest_str, 'utf-8'))
     out.close()
+
+    # Clean HDFS staging directory after successful execution
+    try:
+        hdfs_path_obj = Path(hdfs_tmp_path)
+        hdfs_fs = FileSystem.get(URI(hdfs_tmp_path), conf)
+        if hdfs_fs.exists(hdfs_path_obj):
+            hdfs_fs.delete(hdfs_path_obj, True)
+    except Exception as e:
+        print(f"Warning: Failed to clean HDFS directory: {e}")
 
     spark.stop()
 

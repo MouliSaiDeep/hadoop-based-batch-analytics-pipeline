@@ -12,7 +12,8 @@ with DAG(
     run_spark_job = BashOperator(
         task_id='submit_revenue_recon',
         bash_command="""
-        export PATH=$PATH:~/.local/bin
-        spark-submit --master spark://spark-master:7077 /jobs/revenue_recon.py '{{ dag_run.conf.get("run_id") }}'
+        export PYSPARK_PYTHON=/opt/bitnami/python/bin/python3
+        export PYSPARK_DRIVER_PYTHON=/usr/bin/python3
+        spark-submit --master spark://spark-master:7077 /jobs/revenue_recon.py '{{ dag_run.conf.get("run_id") }}' /data/cdr_data.csv
         """
     )

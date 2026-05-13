@@ -37,14 +37,30 @@ echo "Triggering Airflow DAG: $DAG_ID with run_id: $RUN_ID"
 docker compose exec -T airflow airflow dags trigger -r "$RUN_ID" --conf "{\"run_id\":\"$RUN_ID\"}" "$DAG_ID"
 
 echo "Waiting for DAG $DAG_ID to complete..."
-while true; do
-    STATE=$(docker compose exec -T airflow airflow dags state "$DAG_ID" "$RUN_ID")
-    if [ "$STATE" == "success" ]; then
-        echo "DAG completed successfully."
-        break
-    elif [ "$STATE" == "failed" ]; then
-        echo "DAG failed."
-        exit 1
+TIMEOUT=300
+ELAPSED=0
+INTERVAL=5
+
+while [ $ELAPSED -lt $TIMEOUT ]; do
+    # Fetch DAG runs using valid airflow command list-runs
+    RUN_LINE=$(docker compose exec -T airflow airflow dags list-runs -d "$DAG_ID" --no-backfill 2>/dev/null | grep "$RUN_ID" || true)
+    
+    if [ -n "$RUN_LINE" ]; then
+        # Extract the state field (column 3 when partitioned by '|')
+        STATE=$(echo "$RUN_LINE" | awk -F '|' '{print $3}' | tr -d '[:space:]')
+        
+        if [ "$STATE" == "success" ]; then
+            echo "DAG completed successfully."
+            exit 0
+        elif [ "$STATE" == "failed" ]; then
+            echo "DAG failed."
+            exit 1
+        fi
     fi
-    sleep 5
+    
+    sleep $INTERVAL
+    ELAPSED=$((ELAPSED + INTERVAL))
 done
+
+echo "Error: DAG run timed out after ${TIMEOUT} seconds."
+exit 1

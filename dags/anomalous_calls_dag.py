@@ -12,6 +12,8 @@ with DAG(
     run_spark_job = BashOperator(
         task_id='submit_anomalous_calls',
         bash_command="""
-        spark-submit --master spark://spark-master:7077 /jobs/anomalous_calls.py '{{ dag_run.conf.get("run_id") }}'
+        export PYSPARK_PYTHON=/opt/bitnami/python/bin/python3
+        export PYSPARK_DRIVER_PYTHON=/usr/bin/python3
+        spark-submit --master spark://spark-master:7077 /jobs/anomalous_calls.py '{{ dag_run.conf.get("run_id") }}' /data/cdr_data.csv
         """
     )

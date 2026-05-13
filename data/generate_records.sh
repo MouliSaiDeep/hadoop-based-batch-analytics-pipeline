@@ -27,12 +27,17 @@ with open(output_file, mode='w', newline='') as f:
     # Write header
     writer.writerow(["caller_id", "receiver_id", "duration_sec", "tower_id", "timestamp", "call_type", "charge_amount"])
     
-    # Pre-calculate record order to shuffle them
-    record_types = ['whale'] * whale_records + ['normal'] * normal_records
-    random.shuffle(record_types)
+    whale_left = whale_records
+    normal_left = normal_records
+    total_left = total_records
     
-    for r_type in record_types:
-        if r_type == 'whale':
+    for _ in range(total_records):
+        is_whale = False
+        if total_left > 0:
+            if random.random() < (whale_left / total_left):
+                is_whale = True
+                
+        if is_whale:
             writer.writerow([
                 whale_caller,
                 f"USER_{random.randint(1, 10000)}",
@@ -42,6 +47,7 @@ with open(output_file, mode='w', newline='') as f:
                 random.choice(call_types),
                 round(random.uniform(0.1, 5.0), 2)
             ])
+            whale_left -= 1
         else:
             writer.writerow([
                 f"USER_{random.randint(1, 50000)}",
@@ -52,6 +58,8 @@ with open(output_file, mode='w', newline='') as f:
                 random.choice(call_types),
                 round(random.uniform(0.1, 5.0), 2)
             ])
+            normal_left -= 1
+        total_left -= 1
 
 print(f"Successfully generated records.")
 EOF
