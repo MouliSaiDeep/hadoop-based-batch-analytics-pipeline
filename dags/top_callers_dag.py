@@ -13,7 +13,7 @@ with DAG(
         task_id='submit_top_callers',
         bash_command="""
         export PYSPARK_PYTHON=/opt/bitnami/python/bin/python3
-        export PYSPARK_DRIVER_PYTHON=/usr/bin/python3
+        export PYSPARK_DRIVER_PYTHON=$(which python3.11 || which python3)
         spark-submit --master spark://spark-master:7077 /jobs/top_callers.py '{{ dag_run.conf.get("run_id") }}' /data/cdr_data.csv
         """
     )

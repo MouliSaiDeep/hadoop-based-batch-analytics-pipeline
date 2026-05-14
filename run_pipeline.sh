@@ -42,20 +42,15 @@ ELAPSED=0
 INTERVAL=5
 
 while [ $ELAPSED -lt $TIMEOUT ]; do
-    # Fetch DAG runs using valid airflow command list-runs
-    RUN_LINE=$(docker compose exec -T airflow airflow dags list-runs -d "$DAG_ID" --no-backfill 2>/dev/null | grep "$RUN_ID" || true)
+    # Fetch DAG run state dynamically and robustly via JSON API
+    STATE=$(docker compose exec -T airflow python3 -c "import subprocess, json; runs = json.loads(subprocess.check_output(['airflow', 'dags', 'list-runs', '-d', '$DAG_ID', '-o', 'json']).decode('utf-8')); matching = [r['state'] for r in runs if r['run_id'] == '$RUN_ID']; print(matching[0] if matching else '')" 2>/dev/null || true)
     
-    if [ -n "$RUN_LINE" ]; then
-        # Extract the state field (column 3 when partitioned by '|')
-        STATE=$(echo "$RUN_LINE" | awk -F '|' '{print $3}' | tr -d '[:space:]')
-        
-        if [ "$STATE" == "success" ]; then
-            echo "DAG completed successfully."
-            exit 0
-        elif [ "$STATE" == "failed" ]; then
-            echo "DAG failed."
-            exit 1
-        fi
+    if [ "$STATE" == "success" ]; then
+        echo "DAG completed successfully."
+        exit 0
+    elif [ "$STATE" == "failed" ]; then
+        echo "DAG failed."
+        exit 1
     fi
     
     sleep $INTERVAL
