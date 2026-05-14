@@ -98,14 +98,13 @@ def main():
     Path = spark._jvm.org.apache.hadoop.fs.Path
     FileSystem = spark._jvm.org.apache.hadoop.fs.FileSystem
     conf = spark._jsc.hadoopConfiguration()
-    fs = FileSystem.get(URI(full_path := output_path), conf)
-    if not full_path.startswith("hdfs://") and not full_path.startswith("file://"):
+    if not output_path.startswith(("hdfs://", "file://")):
         default_fs = conf.get("fs.defaultFS")
-        if default_fs and default_fs.startswith("hdfs://"):
-            full_path = default_fs + output_path
-        else:
-            full_path = "file://" + os.path.abspath(output_path)
-            
+        full_path = (default_fs + output_path) if (default_fs and default_fs.startswith("hdfs://")) \
+                    else ("file://" + os.path.abspath(output_path))
+    else:
+        full_path = output_path
+        
     fs = FileSystem.get(URI(full_path), conf)
     out = fs.create(Path(manifest_path), True)
     out.write(bytearray(manifest_str, 'utf-8'))

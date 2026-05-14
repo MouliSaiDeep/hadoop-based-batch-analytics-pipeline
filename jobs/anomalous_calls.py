@@ -4,7 +4,7 @@ import json
 import math
 from datetime import datetime, timezone
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, lit, mean as _mean, stddev as _stddev, abs as _abs
+from pyspark.sql.functions import col, lit, mean as _mean, stddev as _stddev, abs as _abs, round as _round
 from pyspark.sql.types import StructType, StructField, StringType, IntegerType, FloatType
 
 import zlib
@@ -107,34 +107,40 @@ def main():
     input_count = df.count()
 
     # TWO-PASS SKEW MITIGATION STRATEGY:
-    # 1. Isolate the whale caller "WHALE_CALLER_999" (10% of total data = 200k records)
-    whale_df = df.filter(col("caller_id") == "WHALE_CALLER_999")
-    normal_df = df.filter(col("caller_id") != "WHALE_CALLER_999")
+    # 1. Detect skewed callers dynamically (exceeding 1% of total records)
+    threshold = int(input_count * 0.01)
+    caller_counts = df.groupBy("caller_id").count()
+    skewed_callers_df = caller_counts.filter(col("count") > threshold)
+    skewed_callers = [row["caller_id"] for row in skewed_callers_df.select("caller_id").collect()]
 
-    # 2. Compute stats for the whale caller using highly-scalable Spark SQL
-    whale_stats = whale_df.agg(_mean("duration_sec").alias("mean"), _stddev("duration_sec").alias("stddev")).collect()[0]
-    w_mean = whale_stats["mean"] if whale_stats["mean"] is not None else 0.0
-    w_stddev = whale_stats["stddev"] if whale_stats["stddev"] is not None else 0.0
-
-    if w_stddev > 0:
-        whale_anomalies_df = whale_df.filter(_abs(col("duration_sec") - w_mean) > 3 * w_stddev) \
+    if skewed_callers:
+        skewed_df = df.filter(col("caller_id").isin(skewed_callers))
+        normal_df = df.filter(~col("caller_id").isin(skewed_callers))
+        
+        # 2. Compute stats for skewed callers using highly-scalable Spark SQL GroupBy
+        skewed_stats = skewed_df.groupBy("caller_id") \
+            .agg(_mean("duration_sec").alias("mean"), _stddev("duration_sec").alias("stddev"))
+        
+        skewed_joined = skewed_df.join(skewed_stats, "caller_id")
+        skewed_anomalies_df = skewed_joined.filter((col("stddev") > 0) & (_abs(col("duration_sec") - col("mean")) > 3 * col("stddev"))) \
             .select(
                 col("caller_id"),
                 col("timestamp").alias("call_timestamp"),
                 col("duration_sec"),
-                lit(float(round(w_mean, 2))).alias("user_mean_duration"),
-                lit(float(round(w_stddev, 2))).alias("user_stddev")
+                _round(col("mean"), 2).alias("user_mean_duration"),
+                _round(col("stddev"), 2).alias("user_stddev")
             )
     else:
-        # Create empty DataFrame with same schema if stddev is 0
-        whale_anomalies_schema = StructType([
+        # Create empty DataFrame with same schema if no skewed callers
+        skewed_anomalies_schema = StructType([
             StructField("caller_id", StringType(), True),
             StructField("call_timestamp", StringType(), True),
             StructField("duration_sec", IntegerType(), True),
             StructField("user_mean_duration", FloatType(), True),
             StructField("user_stddev", FloatType(), True)
         ])
-        whale_anomalies_df = spark.createDataFrame([], whale_anomalies_schema)
+        skewed_anomalies_df = spark.createDataFrame([], skewed_anomalies_schema)
+        normal_df = df
 
     # 3. For normal callers, apply Custom Partitioner on Key-Value RDD to route to reducers safely
     kv_rdd = normal_df.rdd.map(lambda row: (row['caller_id'], row.asDict()))
@@ -154,7 +160,7 @@ def main():
     normal_anomalies_df = spark.createDataFrame(normal_anomalies_rdd, normal_anomalies_schema)
     
     # 4. Union the two DataFrames to construct the final results
-    result_df = whale_anomalies_df.union(normal_anomalies_df)
+    result_df = skewed_anomalies_df.union(normal_anomalies_df)
     result_df = result_df.select("caller_id", "call_timestamp", "duration_sec", "user_mean_duration", "user_stddev")
 
     # Cache result to prevent re-computation during count & write
