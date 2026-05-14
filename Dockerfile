@@ -1,9 +1,10 @@
 FROM apache/airflow:2.8.0
 
 USER root
-# Install Java and procps (needed for Spark)
+# Install Java, procps, python3-pip, and system-wide PySpark 3.5.0 for Python 3.11
 RUN apt-get update && \
-    apt-get install -y default-jre-headless procps && \
+    apt-get install -y default-jre-headless procps python3-pip && \
+    /usr/bin/python3.11 -m pip install --break-system-packages pyspark==3.5.0 && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
