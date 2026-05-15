@@ -65,4 +65,4 @@ print(f"Successfully generated records.")
 EOF
 
 # Execute the python script
-python /data/generate.py
+python3 /data/generate.py
