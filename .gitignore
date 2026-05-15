@@ -1,6 +1,7 @@
 data/cdr_data.csv
 data/generate.py
-output/
+output/*
+!output/.gitkeep
 .idea/
 .vscode/
 __pycache__/
