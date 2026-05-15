@@ -12,6 +12,6 @@ with DAG(
     run_spark_job = BashOperator(
         task_id='submit_anomalous_calls',
         bash_command="""
-        spark-submit --master spark://spark-master:7077 --conf spark.pyspark.python=/usr/bin/python3 --conf spark.pyspark.driver.python=/usr/bin/python3 /jobs/anomalous_calls.py '{{ dag_run.conf.get("run_id") or run_id }}' /data/cdr_data.csv
+        spark-submit --master spark://spark-master:7077 --conf spark.pyspark.python=/usr/bin/python3 --conf spark.pyspark.driver.python=/usr/bin/python3 /jobs/anomalous_calls.py '{{ dag_run.conf.get("run_id") or dag_run.run_id }}' /data/cdr_data.csv
         """
     )

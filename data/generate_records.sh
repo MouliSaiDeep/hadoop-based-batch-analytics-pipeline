@@ -7,7 +7,7 @@ import csv
 import random
 from datetime import datetime, timedelta
 
-total_records = 2000000
+total_records = 2000001
 whale_records = int(total_records * 0.1)  # 200,000 records
 normal_records = total_records - whale_records
 

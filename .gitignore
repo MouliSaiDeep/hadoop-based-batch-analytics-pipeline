@@ -2,6 +2,14 @@ data/cdr_data.csv
 data/generate.py
 output/*
 !output/.gitkeep
+!output/anomalous_call_detection/
+!output/anomalous_call_detection/.gitkeep
+!output/revenue_reconciliation/
+!output/revenue_reconciliation/.gitkeep
+!output/top_callers_by_spend/
+!output/top_callers_by_spend/.gitkeep
+!output/tower_utilization_heatmap/
+!output/tower_utilization_heatmap/.gitkeep
 .idea/
 .vscode/
 __pycache__/

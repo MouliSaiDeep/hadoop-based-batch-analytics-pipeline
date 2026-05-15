@@ -73,7 +73,7 @@ try:
     out = subprocess.check_output(['airflow', 'dags', 'list-runs', '-d', '$DAG_ID', '--output', 'json'], stderr=subprocess.DEVNULL).decode('utf-8').strip()
     if out:
         runs = json.loads(out)
-        matching = [r['state'] for r in runs if r['run_id'] == '$RUN_ID']
+        matching = [r['state'] for r in runs if r.get('dag_run_id') == '$RUN_ID' or r.get('run_id') == '$RUN_ID']
         if matching:
             print(matching[0])
             sys.exit(0)

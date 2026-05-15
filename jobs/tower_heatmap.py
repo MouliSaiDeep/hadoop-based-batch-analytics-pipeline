@@ -77,6 +77,9 @@ def main():
             to_timestamp(col("timestamp"), "yyyy-MM-dd'T'HH:mm:ss")
         )))
 
+        # Drop rows where timestamp parsing failed and hour_of_day is null
+        df_with_hour = df_with_hour.filter(col("hour_of_day").isNotNull())
+
         result_df = df_with_hour.groupBy("tower_id", "hour_of_day").count() \
             .withColumnRenamed("count", "call_count")
 
@@ -101,7 +104,7 @@ def main():
             "run_id": run_id,
             "execution_timestamp_utc": datetime.now(timezone.utc).isoformat(),
             "input_path": input_path,
-            "output_path": output_path,
+            "output_path": hdfs_tmp_path,
             "input_record_count": input_count,
             "output_record_count": output_count,
             "status": "SUCCESS"
@@ -153,7 +156,7 @@ def main():
             "run_id": run_id,
             "execution_timestamp_utc": datetime.now(timezone.utc).isoformat(),
             "input_path": input_path,
-            "output_path": output_path,
+            "output_path": hdfs_tmp_path,
             "input_record_count": input_count,
             "output_record_count": 0,
             "status": "FAILURE"

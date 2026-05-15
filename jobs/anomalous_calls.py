@@ -9,9 +9,6 @@ from pyspark.sql.types import StructType, StructField, StringType, IntegerType, 
 
 import zlib
 
-broadcast_whale_stats = None
-broadcast_whales = None
-
 def copy_directory_from_hdfs_to_local(spark, hdfs_dir, output_dir):
     URI = spark._jvm.java.net.URI
     Path = spark._jvm.org.apache.hadoop.fs.Path
@@ -55,44 +52,62 @@ def custom_partitioner(key):
     # Deterministic hash instead of Python's randomized built-in hash()
     return zlib.crc32(key.encode('utf-8')) % 20
 
-def process_partition(iterator):
-    # Group all records by caller_id within this partition
-    user_data = {}
-    for key, record in iterator:
-        caller_id = record['caller_id']
-        if caller_id not in user_data:
-            user_data[caller_id] = []
-        user_data[caller_id].append(record)
-    
-    results = []
-    for caller_id, records in user_data.items():
-        is_whale = caller_id in broadcast_whales.value
-        if is_whale:
-            mean, stddev = broadcast_whale_stats.value.get(caller_id, (0.0, 0.0))
+def make_mapper(bcast_whales):
+    def map_to_kv(row):
+        caller_id = row['caller_id']
+        if caller_id in bcast_whales.value:
+            # Add salt suffix to distribute the whale's records across all partitions
+            import random
+            salt = random.randint(0, 19)
+            key = f"{caller_id}_{salt}"
         else:
-            if len(records) < 2:
-                mean = records[0]['duration_sec'] if records else 0
-                stddev = 0.0
+            key = caller_id
+        return (key, row.asDict())
+
+    return map_to_kv
+
+
+def make_processor(bcast_whales, bcast_whale_stats):
+    def process_partition(iterator):
+        # Group all records by caller_id within this partition
+        user_data = {}
+        for key, record in iterator:
+            caller_id = record['caller_id']
+            if caller_id not in user_data:
+                user_data[caller_id] = []
+            user_data[caller_id].append(record)
+
+        results = []
+        for caller_id, records in user_data.items():
+            is_whale = caller_id in bcast_whales.value
+            if is_whale:
+                mean, stddev = bcast_whale_stats.value.get(caller_id, (0.0, 0.0))
             else:
-                durations = [r['duration_sec'] for r in records]
-                mean = sum(durations) / len(durations)
-                variance = sum((x - mean) ** 2 for x in durations) / (len(durations) - 1)
-                stddev = math.sqrt(variance)
-        
-        # Avoid division by zero or 0 stddev
-        if stddev == 0:
-            continue
-            
-        for r in records:
-            if abs(r['duration_sec'] - mean) > 3 * stddev:
-                results.append((
-                    caller_id,
-                    r['timestamp'],
-                    int(r['duration_sec']),  # Cast explicitly to int to align with Spark IntegerType
-                    float(round(mean, 2)),
-                    float(round(stddev, 2))
-                ))
-    return iter(results)
+                if len(records) < 2:
+                    mean = records[0]['duration_sec'] if records else 0
+                    stddev = 0.0
+                else:
+                    durations = [r['duration_sec'] for r in records]
+                    mean = sum(durations) / len(durations)
+                    variance = sum((x - mean) ** 2 for x in durations) / (len(durations) - 1)
+                    stddev = math.sqrt(variance)
+
+            # Avoid division by zero or 0 stddev
+            if stddev == 0:
+                continue
+
+            for r in records:
+                if abs(r['duration_sec'] - mean) > 3 * stddev:
+                    results.append((
+                        caller_id,
+                        r['timestamp'],
+                        int(r['duration_sec']),  # Cast explicitly to int to align with Spark IntegerType
+                        float(round(mean, 2)),
+                        float(round(stddev, 2))
+                    ))
+        return iter(results)
+
+    return process_partition
 
 def main():
     if len(sys.argv) < 2:
@@ -122,8 +137,6 @@ def main():
         input_count = df.count()
 
         # Identify whale callers (e.g. counts > 50,000)
-        global broadcast_whale_stats, broadcast_whales
-        
         counts_df = df.groupBy("caller_id").count()
         whales = [row['caller_id'] for row in counts_df.filter(col("count") > 50000).collect()]
         whales_set = set(whales)
@@ -144,22 +157,11 @@ def main():
         broadcast_whales = spark.sparkContext.broadcast(whales_set)
 
         # Apply Custom Partitioner on Key-Value RDD to route all caller records deterministicly to reducers
-        def map_to_kv(row):
-            caller_id = row['caller_id']
-            if caller_id in broadcast_whales.value:
-                # Add salt suffix to distribute the whale's records across all partitions
-                import random
-                salt = random.randint(0, 19)
-                key = f"{caller_id}_{salt}"
-            else:
-                key = caller_id
-            return (key, row.asDict())
-
-        kv_rdd = df.rdd.map(map_to_kv)
+        kv_rdd = df.rdd.map(make_mapper(broadcast_whales))
         partitioned_rdd = kv_rdd.partitionBy(20, custom_partitioner)
         
         # Process partitions to find caller anomalies
-        anomalies_rdd = partitioned_rdd.mapPartitions(process_partition)
+        anomalies_rdd = partitioned_rdd.mapPartitions(make_processor(broadcast_whales, broadcast_whale_stats))
 
         anomalies_schema = StructType([
             StructField("caller_id", StringType(), True),
@@ -190,7 +192,7 @@ def main():
             "run_id": run_id,
             "execution_timestamp_utc": datetime.now(timezone.utc).isoformat(),
             "input_path": input_path,
-            "output_path": output_path,
+            "output_path": hdfs_tmp_path,
             "input_record_count": input_count,
             "output_record_count": output_count,
             "status": "SUCCESS"
@@ -242,7 +244,7 @@ def main():
             "run_id": run_id,
             "execution_timestamp_utc": datetime.now(timezone.utc).isoformat(),
             "input_path": input_path,
-            "output_path": output_path,
+            "output_path": hdfs_tmp_path,
             "input_record_count": input_count,
             "output_record_count": 0,
             "status": "FAILURE"
