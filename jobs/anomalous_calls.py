@@ -55,14 +55,7 @@ def custom_partitioner(key):
 def make_mapper(bcast_whales):
     def map_to_kv(row):
         caller_id = row['caller_id']
-        if caller_id in bcast_whales.value:
-            # Add salt suffix to distribute the whale's records across all partitions
-            import random
-            salt = random.randint(0, 19)
-            key = f"{caller_id}_{salt}"
-        else:
-            key = caller_id
-        return (key, row.asDict())
+        return (caller_id, row.asDict())
 
     return map_to_kv
 
@@ -156,7 +149,7 @@ def main():
         broadcast_whale_stats = spark.sparkContext.broadcast(whale_stats)
         broadcast_whales = spark.sparkContext.broadcast(whales_set)
 
-        # Apply Custom Partitioner on Key-Value RDD to route all caller records deterministicly to reducers
+        # Apply Custom Partitioner on caller_id so each caller is processed by one reducer.
         kv_rdd = df.rdd.map(make_mapper(broadcast_whales))
         partitioned_rdd = kv_rdd.partitionBy(20, custom_partitioner)
         
