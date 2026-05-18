@@ -95,7 +95,7 @@ def main():
             "run_id": run_id,
             "execution_timestamp_utc": datetime.now(timezone.utc).isoformat(),
             "input_path": input_path,
-            "output_path": hdfs_tmp_path,
+            "output_path": output_path,
             "input_record_count": input_count,
             "output_record_count": output_count,
             "status": "SUCCESS"
@@ -147,7 +147,7 @@ def main():
             "run_id": run_id,
             "execution_timestamp_utc": datetime.now(timezone.utc).isoformat(),
             "input_path": input_path,
-            "output_path": hdfs_tmp_path,
+            "output_path": output_path,
             "input_record_count": input_count,
             "output_record_count": 0,
             "status": "FAILURE"
