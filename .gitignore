@@ -10,6 +10,7 @@ output/*
 !output/top_callers_by_spend/.gitkeep
 !output/tower_utilization_heatmap/
 !output/tower_utilization_heatmap/.gitkeep
+output/*/*
 .idea/
 .vscode/
 __pycache__/
