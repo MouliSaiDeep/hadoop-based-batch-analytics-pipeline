@@ -15,3 +15,7 @@ output/*/*
 .vscode/
 __pycache__/
 *.pyc
+
+# Postman Collections
+postman_collection.json
+

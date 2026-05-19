@@ -102,7 +102,7 @@ services:
       - ./data:/data
     # Make startup robust to Windows-mounted line endings and missing exec bit
     command: >
-      bash -c "[ -f /data/generate_records.sh ] && sed -i 's/\r$//' /data/generate_records.sh || true; chmod +x /data/generate_records.sh || true; if [ -f /data/generate_records.sh ]; then /data/generate_records.sh; elif [ -f /data/generate.py ]; then python3 -u /data/generate.py; fi; tail -f /dev/null"
+      bash -c "[ -f /data/generate_records.sh ] && sed -i 's/\r$//' /data/generate_records.sh || true; chmod +x /data/generate_records.sh || true; if [ -f /data/generate.py ]; then python3 -u /data/generate.py; elif [ -f /data/generate_records.sh ]; then sh /data/generate_records.sh; fi; tail -f /dev/null"
     healthcheck:
       test: ["CMD", "test", "-f", "/data/cdr_data.csv"]
       interval: 30s
@@ -139,6 +139,7 @@ services:
       - pipeline-net
     environment:
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.basic_auth
       - _AIRFLOW_DB_UPGRADE=True
       - _AIRFLOW_WWW_USER_CREATE=True
       - _AIRFLOW_WWW_USER_USERNAME=admin
