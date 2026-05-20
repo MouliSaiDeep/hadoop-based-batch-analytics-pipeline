@@ -9,3 +9,6 @@ hdfs dfs -mkdir -p /tmp/output
 hdfs dfs -chmod -R 777 /tmp
 
 echo "HDFS initialization completed successfully!"
+
+# Keep this init service running so compose health checks remain stable.
+tail -f /dev/null
